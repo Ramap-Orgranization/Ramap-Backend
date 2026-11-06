@@ -253,14 +253,21 @@ test("인증 전 느린 본문도 요청 취소 시 즉시 읽기를 중단한�
   const app = harness();
   let cancelled = false;
   const body = new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode("{")); }, cancel() { cancelled = true; } });
+  const abort = new AbortController();
   const request = new Request("https://edge.fixture.invalid", {
-    method: "POST", body, duplex: "half", signal: AbortSignal.timeout(30),
+    method: "POST", body, duplex: "half", signal: abort.signal,
     headers: { "x-ramap-timestamp": timestamp, "x-ramap-signature": "00".repeat(32) },
   });
-  const response = await app.handler(request);
-  assert.equal(response.status, 503);
-  assert.equal(cancelled, true);
-  assert.equal(app.calls.length, 0);
+  // Keep the test process alive until the request is cancelled.
+  const timer = setTimeout(() => abort.abort(), 30);
+  try {
+    const response = await app.handler(request);
+    assert.equal(response.status, 503);
+    assert.equal(cancelled, true);
+    assert.equal(app.calls.length, 0);
+  } finally {
+    clearTimeout(timer);
+  }
 });
 
 test("단축 링크 응답의 정리 작업이 끝나지 않아도 목적지 검증을 진행한다", async () => {
