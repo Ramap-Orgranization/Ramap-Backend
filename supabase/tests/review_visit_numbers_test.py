@@ -31,14 +31,21 @@ def main():
             run("pg_ctl", "-D", str(data), "-l", str(root / "postgres.log"),
                 "-o", f"-k {root} -c listen_addresses=''", "-w", "start")
             started = True
-            for source in (tests / "fixtures/review_visit_numbers.sql",
+            sources = [tests / "fixtures/review_visit_numbers.sql",
                            tests.parent / "migrations/20261026080230_review_feed_filters.sql",
                            tests.parent / "migrations/20261026105129_review_feed_filter_target_presence.sql",
                            args.projection_sql or migration,
-                           tests / "review_visit_numbers.sql"):
+                           tests / "review_visit_numbers.sql"]
+            if args.projection_sql is None:
+                sources += [
+                    tests / "fixtures/withdrawn_reviews.sql",
+                    *sorted((tests.parent / "migrations").glob("*_preserve_withdrawn_account_reviews.sql")),
+                    tests / "withdrawn_reviews.sql",
+                ]
+            for source in sources:
                 run("psql", "-X", "-h", str(root), "-U", "postgres", "-d", "postgres",
                     "-v", "ON_ERROR_STOP=1", "-f", str(source))
-            print("PASS: 반복 작성·삭제, 기존 누적 번호, 비공개·검수 상태, 작성자·매장 분리, 페이지, 조회 권한")
+            print("PASS: 반복 작성·삭제, 기존 누적 번호, 비공개·검수 상태, 작성자·매장 분리, 페이지, 조회 권한, 탈퇴 리뷰 보존과 사진 복사·공개 경계")
         except subprocess.CalledProcessError as error:
             print(error.stdout)
             print(error.stderr)

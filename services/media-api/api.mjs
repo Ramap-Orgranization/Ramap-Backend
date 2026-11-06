@@ -146,6 +146,25 @@ export function createMediaApi({ service, authenticate, internalKey, r2, legacyC
     if (error || !data) throw new MediaError(404, 'media_source_unavailable');
     return { bytes: Buffer.from(await data.arrayBuffer()), contentType: data.type };
   }
+  async function preserveAccountReviewPhotos(userId) {
+    const bucket = 'shop-review-images';
+    const parameters = { p_user_id: userId };
+    for (let batch = 0; batch < 4; batch++) {
+      const copies = await rpc(service, 'list_account_review_photo_copies', parameters);
+      if (!copies.length) return;
+      for (let offset = 0; offset < copies.length; offset += 6) {
+        await Promise.all(copies.slice(offset, offset + 6).map(async (photo) => {
+          const source = await rpc(service, 'fetch_service_media', { p_bucket: bucket, p_path: photo.source_path });
+          const location = source?.state === 'ready' && (selectLocation(source, false) ?? selectLocation(source));
+          if (!location) throw new MediaError(503, 'review_photo_copy_pending');
+          const { bytes, contentType } = await readSource(location);
+          await mirrorLegacy(service, { bucket, path: photo.destination_path, content_type: contentType }, {
+            bytes, checksum: digest(bytes),
+          });
+        }));
+      }
+    }
+  }
   async function backfill(body) {
     validateImageRequest(body);
     const provider = body.provider;
@@ -217,6 +236,7 @@ export function createMediaApi({ service, authenticate, internalKey, r2, legacyC
         }
         result = { deleted: true };
       } else if (action === 'account/cleanup' && !internal) {
+        await preserveAccountReviewPhotos(userId);
         await rpc(service, 'prepare_account_media_cleanup', { p_user_id: userId });
         for (let batch = 0; batch < 20 && await cleanup(null, userId); batch++) { /* Bounded; the check below gates Auth deletion. */ }
         if (await rpc(service, 'account_has_external_media', { p_user_id: userId })) throw new MediaError(503, 'media_cleanup_pending');

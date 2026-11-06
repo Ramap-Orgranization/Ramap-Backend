@@ -103,7 +103,7 @@ test('다른 worker가 삭제 lease를 보유해도 외부 사진이 남으면 �
   const f = fixture();
   f.service.rpc = async (name, params) => {
     f.calls.push([name, params]);
-    return { data: name === 'claim_account_media_cleanup' ? [] : name === 'account_has_external_media' ? true : null, error: null };
+    return { data: name === 'account_has_external_media' ? true : [], error: null };
   };
   assert.equal((await f.request('v2/account/cleanup')).status, 503);
   assert.ok(f.calls.some(([name, params]) => name === 'prepare_account_media_cleanup' && params.p_user_id === id));
@@ -118,6 +118,7 @@ test('타인의 정리 실패와 대기 작업은 사진 없는 사용자의 탈
       assert.equal(params.p_user_id, id);
       return { data: [] };
     }
+    if (name === 'list_account_review_photo_copies') return { data: [] };
     return { data: false };
   };
   f.r2.remove = async () => { throw new Error('other user offline'); };
@@ -132,11 +133,49 @@ test('자기 계정의 실제 삭제 실패는 재시도 대상으로 남고 탈
   const f = fixture();
   f.service.rpc = async (name, params) => {
     f.calls.push([name, params]);
+    if (name === 'list_account_review_photo_copies') return { data: [] };
     return { data: name === 'claim_account_media_cleanup' ? [{ id: 1, provider: 'r2', bucket: 'private', path: 'own.jpg' }] : false };
   };
   f.r2.remove = async () => { throw new Error('offline'); };
   assert.equal((await f.request('v2/account/cleanup')).status, 503);
   assert.ok(f.calls.some(([name, params]) => name === 'finish_media_cleanup' && !params.p_success));
+});
+
+test('R2 리뷰 사진은 계정과 분리된 경로에 복사한 뒤 원본 정리를 시작한다', async () => {
+  const f = fixture();
+  const destination = `withdrawn/${id}/1.jpg`;
+  let copied = false;
+  let uploadFails = true;
+  f.service.rpc = async (name, params) => {
+    f.calls.push([name, params]);
+    if (name === 'list_account_review_photo_copies') {
+      return { data: copied ? [] : [{ source_path: image.path, destination_path: destination }] };
+    }
+    if (name === 'fetch_service_media') {
+      assert.equal(params.p_path, image.path);
+      return { data: { state: 'ready', locations: [{ provider: 'r2', verified: true, path: image.path }] } };
+    }
+    if (name === 'prepare_account_media_cleanup') assert.ok(copied);
+    return { data: name === 'claim_account_media_cleanup' ? [] : false };
+  };
+  f.r2.read = async () => ({ bytes: jpeg, contentType: 'image/jpeg' });
+  f.service.storage.from = (bucket) => ({
+    upload: async (path, bytes, options) => {
+      assert.equal(bucket, image.bucket);
+      assert.equal(path, destination);
+      assert.deepEqual(bytes, jpeg);
+      assert.deepEqual(options, { contentType: 'image/jpeg', upsert: false });
+      if (uploadFails) return { error: { statusCode: '503' } };
+      copied = true;
+      return { error: null };
+    },
+  });
+
+  assert.equal((await f.request('v1/account/cleanup')).status, 503);
+  assert.ok(!f.calls.some(([name]) => name === 'prepare_account_media_cleanup'));
+  uploadFails = false;
+  assert.equal((await f.request('v1/account/cleanup')).status, 200);
+  assert.ok(f.calls.some(([name]) => name === 'prepare_account_media_cleanup'));
 });
 
 test('Supabase 사진 64개는 권한 검사 후 한 번에 서명하고 경로별로 대응한다', async () => {
