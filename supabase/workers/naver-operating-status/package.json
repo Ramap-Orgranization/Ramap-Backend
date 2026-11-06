@@ -1,0 +1,12 @@
+{
+  "name": "ramap-naver-operating-status-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test src/index.test.js"
+  },
+  "dependencies": {
+    "playwright": "1.55.1"
+  }
+}

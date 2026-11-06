@@ -1,0 +1,12 @@
+{
+  "name": "ramap-public-media-worker",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "dev": "wrangler dev --local",
+    "check": "wrangler deploy --dry-run"
+  },
+  "devDependencies": { "wrangler": "4.156.2" }
+}

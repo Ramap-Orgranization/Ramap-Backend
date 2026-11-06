@@ -1,0 +1,10 @@
+{
+  "r2_account_id": "REPLACE_WITH_CLOUDFLARE_ACCOUNT_ID",
+  "r2_public_bucket": "ramap-media-public",
+  "r2_private_bucket": "ramap-media-private",
+  "public_delivery": "worker",
+  "public_worker_name": "ramap-images",
+  "public_cache_enabled": false,
+  "r2_public_base_url": "",
+  "gcp_project": "ramap-54fc7"
+}

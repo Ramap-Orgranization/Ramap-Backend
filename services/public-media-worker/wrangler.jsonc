@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ramap-images",
+  "main": "src.mjs",
+  "compatibility_date": "2026-11-01",
+  "workers_dev": true,
+  "preview_urls": false,
+  "cache": { "enabled": true, "cross_version_cache": false },
+  "vars": { "EDGE_CACHE_ENABLED": "true" },
+  "r2_buckets": [
+    { "binding": "PUBLIC_IMAGES", "bucket_name": "ramap-media-public" }
+  ],
+  "observability": { "enabled": true }
+}

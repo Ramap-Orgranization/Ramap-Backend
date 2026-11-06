@@ -1,0 +1,24 @@
+[functions.kakao-importation]
+verify_jwt = true
+
+[functions.importation-match]
+verify_jwt = true
+
+[functions.admin-event-status]
+verify_jwt = true
+
+[functions.admin-correct-registration]
+verify_jwt = true
+
+[functions.admin-operating-notice]
+verify_jwt = true
+
+[functions.delete-account]
+verify_jwt = true
+
+[functions.submit-place-report]
+verify_jwt = true
+
+# The database authenticates internal validation requests with a private HMAC key.
+[functions.validate-place-report]
+verify_jwt = false

@@ -1,0 +1,19 @@
+{
+  "name": "ramap-media-api",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test test/*.test.mjs",
+    "cleanup": "node worker.mjs"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "3.1161.0",
+    "@aws-sdk/s3-request-presigner": "3.1161.0",
+    "@supabase/supabase-js": "2.118.0",
+    "google-auth-library": "11.3.2"
+  }
+}
