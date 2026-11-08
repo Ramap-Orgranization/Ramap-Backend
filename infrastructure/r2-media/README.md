@@ -2,7 +2,7 @@
 
 DB·로그인·사진 권한은 Supabase, 사진 제어 API와 30분 정리 작업은 기존 서울 Cloud Run을 유지한다. Firebase FCM·Analytics·Crashlytics도 유지한다. 사진 업로드와 비공개 사진 읽기는 앱과 R2 사이에서 직접 처리한다. 공개 사진은 Cloudflare Worker가 R2 파일을 스트리밍한다.
 
-R2 연결 전 기본 동작은 Supabase Storage다. 파일 추가나 로컬 검증만으로 운영 사진 저장소가 전환되지 않는다.
+사진을 쓰는 앱, Edge Function, 운영 도구를 배포하기 전에 사진 API와 R2 연결을 설정한다. 새 업로드에는 R2 쓰기를 활성화해야 한다. 파일 추가나 로컬 검증만으로 운영 사진 저장소가 전환되지 않는다.
 
 ## 주소와 비용
 
@@ -60,13 +60,20 @@ python3 infrastructure/r2-media/provision.py --config /absolute/local/r2-connect
 python3 infrastructure/r2-media/deploy.py --apply --redeploy-only --r2-config /absolute/local/r2-connected.json --output /absolute/local/media-deployment.json
 ```
 
-3. R2 연결이 설정된 앱은 `/v2`를 사용하고, 미설정 앱은 Supabase Storage를 직접 사용한다. 구버전 `/v1`에는 Supabase 주소만 반환한다. 앱 BuildKonfig에 공개 정보인 `media.r2_account_id`, `media.r2_private_bucket`을 지정한다. 공개 사진 검증 전 `media.r2_public_base_url`은 비워 Supabase 공개 URL을 사용한다.
+3. R2 연결이 설정된 앱은 `/v2`를 사용하고, 미설정 앱은 Supabase Storage를 직접 사용한다. 앱 BuildKonfig에 공개 정보인 `media.r2_account_id`, `media.r2_private_bucket`을 지정한다. 공개 사진 검증 전 `media.r2_public_base_url`은 비워 Supabase 공개 URL을 사용한다.
 
 앱 빌드에는 `media.api_url`, `media.r2_account_id`, `media.r2_private_bucket`, `media.r2_public_base_url`을 ignored `local.properties`에 지정하거나 각각 `MEDIA_API_URL`, `R2_ACCOUNT_ID`, `R2_PRIVATE_BUCKET`, `R2_PUBLIC_BASE_URL` 환경 변수로 주입한다. Android CI는 같은 이름의 GitHub repository variables를 사용한다. 이 값들은 공개 연결 정보이며 S3 접근 키와 서비스 역할 키는 포함하지 않는다.
-4. Edge `preview-event`·`register-event` 환경에도 `R2_ACCOUNT_ID`, `R2_PRIVATE_BUCKET`을 지정하고 `_shared/media-storage.ts`를 함께 배포한다. 계정 탈퇴는 기존 API로 모든 provider 정리를 확인한다.
-5. 새 업로드는 prepare 시 provider와 필요한 호환 복사를 고정한다. R2 업로드는 필요한 Supabase 호환 복사가 끝나야 ready다. v1 업로드는 Supabase를 사용하므로 신규분을 inventory에 포함해 복사한다. 운영 수동 등록은 기존 `infrastructure/r2-media/upload.py`를 사용한다. Storage 직접 쓰기를 계속 사용하는 공개 writer가 있으면 사진 주소 전환을 완료할 수 없다.
+4. Edge `preview-event`·`register-event` 환경에도 `R2_ACCOUNT_ID`, `R2_PRIVATE_BUCKET`을 지정하고 `_shared/media-storage.ts`를 함께 배포한다. `delete-account`는 `/v2/account/cleanup`에서 모든 provider 정리를 확인한다.
+5. 새 업로드는 prepare 시 provider와 필요한 호환 복사를 고정한다. R2 업로드는 필요한 Supabase 호환 복사가 끝나야 ready다. 운영 수동 등록은 기존 `infrastructure/r2-media/upload.py`를 사용한다. Storage 직접 쓰기를 계속 사용하는 공개 writer가 있으면 사진 주소 전환을 완료할 수 없다.
 
 공개 사진 주소는 `R2_PUBLIC_BASE_URL`, `R2_PUBLIC_DELIVERY=worker`로 설정한다. 외부 네이버 사진은 그대로 둔다.
+
+## 사진 전송의 R2 전환
+
+1. 운영 앱과 등록 도구가 v2 사진 API를 지원하는지 확인한다. 사용 중인 사진의 R2 복사를 검증하고 미완료 업로드가 없는 시점에 전환한다.
+2. `20261108121846_retire_supabase_photo_serving.sql`을 적용한다. 이 SQL은 R2가 켜져 있고 사용 중인 기존 사진이 R2에서 제공되며 Supabase 호환 복사가 필요한 업로드가 끝났는지 확인한다. 검사를 통과하면 새 호환 복사를 끈다.
+3. 사진 API와 정리 job을 배포하고, 이벤트 Edge Function과 앱을 차례로 배포한다. SQL 적용 후 새 사진 API가 뜨기 전의 탈퇴 사진 보존 요청은 재시도가 필요할 수 있으므로 두 단계를 연이어 적용한다.
+4. 사진 업로드, 권한별 서명, 이벤트 제보 사진 복사, 테스트 계정의 탈퇴 사진 보존과 원본 정리를 검증한다. 백필 도구와 원본 삭제 작업은 보존 기간 중 기존 Supabase 사본에 접근할 수 있다.
 
 ## 기존 사진과 신규분 복사
 
@@ -89,7 +96,7 @@ R2_SMOKE=staging node services/media-api/r2-smoke.mjs
 
 별도로 staging API에서 Supabase 소유권/팔로우/차단/신고 정책, 실제 크기 제약의 거절, 공개 Worker GET·HEAD·304·비공개 경로 거절·삭제 후 404, 업로드 중 삭제·탈퇴를 검증한다. 한국 네트워크에서 같은 사진의 Supabase/Worker 최초·재조회 지연을 측정한다.
 
-검증 후 service role에서 `configure_r2_media(true,false)`로 v2 비공개 읽기를 먼저 확인한다. 이후 `configure_r2_media(true,true)`로 v2 쓰기와 Supabase 호환 복사를 활성화한다. v1의 Supabase 직접 업로드는 inventory로 확인해 추가 복사한다. 구버전 지원 중 legacy mirror는 true를 유지한다. 공개 사진 누락 0건과 모든 공개 writer의 R2 복사를 확인한 후 앱 `media.r2_public_base_url`을 실제 Worker 주소로 설정해 배포한다. 공개 주소는 앱에 고정되므로 DB 읽기 플래그만으로 이미 배포된 주소를 되돌릴 수 없다.
+검증 후 service role에서 `configure_r2_media(true,false)`로 v2 비공개 읽기를 먼저 확인한다. 이후 `configure_r2_media(true,true)`로 v2 쓰기와 Supabase 호환 복사를 활성화한다. Supabase Storage 직접 업로드는 inventory로 확인해 추가 복사한다. 공개 사진 누락 0건과 모든 공개 writer의 R2 복사를 확인한 후 앱 `media.r2_public_base_url`을 실제 Worker 주소로 설정해 배포한다. 공개 주소는 앱에 고정되므로 DB 읽기 플래그만으로 이미 배포된 주소를 되돌릴 수 없다.
 
 ## 삭제와 복구
 
@@ -101,7 +108,7 @@ R2_SMOKE=staging node services/media-api/r2-smoke.mjs
 
 삭제는 기록된 generation에 한정한다. generation이 없는 과거 이력은 실제 객체와 대조해 보완해야 하며 임의로 최신 파일을 삭제하지 않는다. GCS soft-delete 보존 중에는 파일이 아직 남아 있으므로 제공자의 보존 기한이 끝나고 부재가 확인될 때까지 재시도한다. 관련 회귀 검증은 `python3 supabase/tests/media_storage_test.py`와 `npm --prefix services/media-api test`로 실행한다.
 
-`configure_r2_media(false,false)`로 새로운 R2 선택을 중단하고 R2/Supabase 호환 앱·API를 유지한다. Worker URL이 배포됐다면 Worker와 객체 제공도 유지한다. 원본 보존 종료는 별도 결정이다. Supabase 원본의 일반 삭제는 전체 논리 사진 삭제로 전파되므로 단순 일괄 삭제하지 않는다.
+서버를 되돌릴 때도 이미 등록된 R2 전용 사진을 제공할 수 있도록 R2 읽기·쓰기를 유지한다. 전환 SQL과 새 탈퇴 복사 경로를 짝으로 관리한다. Worker URL이 배포됐다면 Worker와 객체 제공도 유지한다. 원본 보존 종료는 별도 결정이다. Supabase 원본의 일반 삭제는 전체 논리 사진 삭제로 전파되므로 단순 일괄 삭제하지 않는다.
 
 기존 자체 도메인 방식도 `public_delivery=custom_domain`으로 지원하지만, 그 경우 소유 도메인·Cloudflare zone·Cache Purge 토큰이 필요하다. Worker 방식으로 바꾸며 이미 배포된 자체 도메인을 끄는 작업은 별도 검토한다.
 

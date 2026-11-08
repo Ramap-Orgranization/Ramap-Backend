@@ -9,14 +9,14 @@ const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0x00]);
 
 function fixture(overrides = {}) {
   const calls = [];
-  const item = { ...image, id, state: 'pending', owner_id: id, byte_size: jpeg.length, content_type: 'image/jpeg', legacy_required: true, upload_provider: 'r2', required_providers: ['supabase'] };
+  const item = { ...image, id, state: 'pending', owner_id: id, byte_size: jpeg.length, content_type: 'image/jpeg', upload_provider: 'r2', required_providers: [] };
   const service = {
     rpc: async (name, params) => {
       calls.push([name, params]);
       const data = ['claim_media_cleanup', 'claim_account_media_cleanup'].includes(name) ? [] : item;
       return { data, error: null };
     },
-    storage: { from: () => ({ upload: async () => { calls.push(['mirror']); return { error: null }; } }) },
+    storage: { from: () => assert.fail('사진 전송을 Supabase Storage로 우회함') },
   };
   const r2 = {
     pendingBucket: 'private', finalBucket: () => 'private',
@@ -39,8 +39,18 @@ function fixture(overrides = {}) {
 test('인증하지 않은 업로드와 위조 내부 요청은 DB에 도달하지 않는다', async () => {
   const f = fixture();
   assert.equal((await f.request('v2/prepare', image, null)).status, 401);
-  assert.equal((await f.request('internal/prepare', image, 'wrong-secret')).status, 401);
+  assert.equal((await f.request('internal/v2/prepare', image, 'wrong-secret')).status, 401);
   assert.equal(f.calls.filter(([name]) => name !== 'authenticate').length, 0);
+});
+
+test('종료한 사진 API 경로는 인증이나 저장소 작업 없이 404를 반환한다', async () => {
+  const f = fixture();
+  for (const path of ['v1/resolve', 'v1/account/cleanup', 'internal/prepare']) {
+    const response = await f.request(path, {}, 'server-secret');
+    assert.equal(response.status, 404);
+    assert.deepEqual(await response.json(), { code: 'not_found' });
+  }
+  assert.deepEqual(f.calls, []);
 });
 
 test('만료된 사용자 인증을 익명 읽기로 낮추지 않는다', async () => {
@@ -48,17 +58,21 @@ test('만료된 사용자 인증을 익명 읽기로 낮추지 않는다', async
   assert.equal((await f.request('v2/resolve', { images: [image] }, 'expired')).status, 401);
 });
 
-test('파일 검증과 구버전 복사가 모두 끝나야 ready를 기록한다', async () => {
+test('R2 파일 검증과 확정으로만 업로드를 완료한다', async () => {
   const f = fixture();
   const response = await f.request('v2/finalize', { id });
   assert.equal(response.status, 200);
-  assert.ok(f.calls.findIndex(([name]) => name === 'mirror') < f.calls.findIndex(([name]) => name === 'complete_media_upload_v2'));
+  const [, completion] = f.calls.find(([name]) => name === 'complete_media_upload_v2');
+  assert.deepEqual(completion.p_locations, [
+    { provider: 'r2', bucket: 'private', path: `${image.bucket}/${image.path}`, etag: 'opaque' },
+  ]);
 });
 
-test('구버전 복사 실패는 완료를 기록하지 않고 재시도 가능하게 남긴다', async () => {
+test('호환 복사 조건이 남아 있는 이전 업로드는 완료하지 않는다', async () => {
   const f = fixture();
-  f.service.storage.from = () => ({ upload: async () => ({ error: { statusCode: '503' } }) });
-  assert.equal((await f.request('v2/finalize', { id })).status, 503);
+  f.item.required_providers = ['supabase'];
+  f.r2.finalize = async () => assert.fail('종료한 호환 업로드를 확정함');
+  assert.equal((await f.request('v2/finalize', { id })).status, 409);
   assert.ok(!f.calls.some(([name]) => name === 'complete_media_upload_v2'));
 });
 
@@ -141,9 +155,10 @@ test('자기 계정의 실제 삭제 실패는 재시도 대상으로 남고 탈
   assert.ok(f.calls.some(([name, params]) => name === 'finish_media_cleanup' && !params.p_success));
 });
 
-test('R2 리뷰 사진은 계정과 분리된 경로에 복사한 뒤 원본 정리를 시작한다', async () => {
+test('탈퇴 리뷰는 R2 복사가 검증된 뒤에만 원본 정리를 시작한다', async () => {
   const f = fixture();
-  const destination = `withdrawn/${id}/1.jpg`;
+  const destination = 'withdrawn/' + id + '/1.jpg';
+  const reserved = { ...f.item, path: destination, checksum: digest(jpeg), upload_expires_at: 'attempt-deadline' };
   let copied = false;
   let uploadFails = true;
   f.service.rpc = async (name, params) => {
@@ -151,77 +166,62 @@ test('R2 리뷰 사진은 계정과 분리된 경로에 복사한 뒤 원본 정
     if (name === 'list_account_review_photo_copies') {
       return { data: copied ? [] : [{ source_path: image.path, destination_path: destination }] };
     }
+    if (name === 'reserve_withdrawn_review_photo') {
+      assert.deepEqual(params, { p_user_id: id, p_source_path: image.path, p_destination_path: destination, p_bucket: 'private' });
+      return { data: reserved };
+    }
     if (name === 'fetch_service_media') {
       assert.equal(params.p_path, image.path);
-      return { data: { state: 'ready', locations: [{ provider: 'r2', verified: true, path: image.path }] } };
+      return { data: { state: 'ready', locations: [
+        { provider: 'supabase', verified: true, path: image.path },
+        { provider: 'r2', verified: true, path: image.path, etag: 'source' },
+      ] } };
+    }
+    if (name === 'finish_withdrawn_review_photo') {
+      assert.deepEqual(params, { p_user_id: id, p_id: id, p_expires_at: 'attempt-deadline', p_etag: 'destination', p_checksum: digest(jpeg) });
+      copied = true;
     }
     if (name === 'prepare_account_media_cleanup') assert.ok(copied);
     return { data: name === 'claim_account_media_cleanup' ? [] : false };
   };
-  f.r2.read = async () => ({ bytes: jpeg, contentType: 'image/jpeg' });
-  f.service.storage.from = (bucket) => ({
-    upload: async (path, bytes, options) => {
-      assert.equal(bucket, image.bucket);
-      assert.equal(path, destination);
-      assert.deepEqual(bytes, jpeg);
-      assert.deepEqual(options, { contentType: 'image/jpeg', upsert: false });
-      if (uploadFails) return { error: { statusCode: '503' } };
-      copied = true;
-      return { error: null };
-    },
-  });
+  f.r2.read = async (location) => {
+    assert.equal(location.etag, 'source');
+    return { bytes: jpeg, contentType: 'image/jpeg' };
+  };
+  f.r2.store = async (item, bytes) => {
+    assert.equal(item.path, destination);
+    assert.deepEqual(bytes, jpeg);
+    if (uploadFails) throw new Error('offline');
+    return { etag: 'destination', checksum: digest(bytes) };
+  };
 
-  assert.equal((await f.request('v1/account/cleanup')).status, 503);
-  assert.ok(!f.calls.some(([name]) => name === 'prepare_account_media_cleanup'));
+  assert.equal((await f.request('v2/account/cleanup')).status, 503);
+  assert.ok(!f.calls.some(([name]) => name === 'finish_withdrawn_review_photo' || name === 'prepare_account_media_cleanup'));
   uploadFails = false;
-  assert.equal((await f.request('v1/account/cleanup')).status, 200);
+  assert.equal((await f.request('v2/account/cleanup')).status, 200);
   assert.ok(f.calls.some(([name]) => name === 'prepare_account_media_cleanup'));
 });
 
-test('Supabase 사진 64개는 권한 검사 후 한 번에 서명하고 경로별로 대응한다', async () => {
-  const images = Array.from({ length: 64 }, (_, index) => ({ bucket: image.bucket, path: `${id}/${index}.jpg` }));
+test('사진 서명은 DB에서 허용한 경로 중 R2 위치만 반환한다', async () => {
   const f = fixture();
-  f.service.rpc = async (name) => {
+  const legacy = { ...image, path: 'legacy.jpg' };
+  const denied = { ...image, path: 'denied.jpg' };
+  const requested = [legacy, image, denied];
+  f.service.rpc = async (name, params) => {
     assert.equal(name, 'resolve_media_locations_v2');
-    return { data: images.map((entry) => ({ ...entry, provider: 'supabase', physical_bucket: entry.bucket, object_key: entry.path })) };
+    assert.deepEqual(params.p_images, requested);
+    return { data: [
+      { ...legacy, provider: 'supabase', object_key: legacy.path },
+      { ...image, provider: 'r2', object_key: image.path },
+    ] };
   };
-  let batches = 0;
-  f.service.storage.from = (bucket) => ({
-    createSignedUrls: async (paths, seconds) => {
-      batches++;
-      assert.equal(bucket, image.bucket);
-      assert.deepEqual(paths, images.map((entry) => entry.path));
-      assert.equal(seconds, 300);
-      return { data: paths.toReversed().map((path) => ({ path, signedUrl: `https://storage.test/${path}` })) };
-    },
-  });
-  const response = await f.request('v2/resolve', { images });
-  assert.equal(response.status, 200);
-  assert.deepEqual((await response.json()).map(({ path, url }) => [path, url]), images.map(({ path }) => [path, `https://storage.test/${path}`]));
-  assert.equal(batches, 1);
-});
-
-test('버킷별 부분 서명 실패와 누락 및 중복 응답을 다른 사진에 적용하지 않는다', async () => {
-  const locations = [
-    { bucket: 'profile-avatars', path: 'one', provider: 'supabase', physical_bucket: 'avatars', object_key: 'one' },
-    { bucket: 'profile-avatars', path: 'missing', provider: 'supabase', physical_bucket: 'avatars', object_key: 'missing' },
-    { bucket: 'profile-avatars', path: 'denied', provider: 'supabase', physical_bucket: 'avatars', object_key: 'denied' },
-    { bucket: 'profile-avatars', path: 'duplicate', provider: 'supabase', physical_bucket: 'avatars', object_key: 'duplicate' },
-    { bucket: 'shop-review-images', path: 'failed', provider: 'supabase', physical_bucket: 'reviews', object_key: 'failed' },
-    { bucket: 'shop-review-images', path: 'r2', provider: 'r2' },
-  ];
-  const user = {
-    rpc: async () => ({ data: locations }),
-    storage: { from: (bucket) => ({ createSignedUrls: async () => bucket === 'reviews' ? { error: new Error('offline') } : {
-      data: [{ path: 'one', signedUrl: 'one-url' }, { path: 'denied', error: 'denied', signedUrl: 'forbidden' },
-        { path: 'duplicate', signedUrl: 'first' }, { path: 'duplicate', signedUrl: 'second' }, { path: 'unrequested', signedUrl: 'ignored' }],
-    } }) },
+  f.r2.signRead = async (location) => {
+    assert.equal(location.object_key, image.path);
+    return { url: 'signed', expires_at: 'future' };
   };
-  const f = fixture({ authenticate: async () => ({ client: user, userId: id }) });
-  f.service.storage.from = () => assert.fail('사용자 서명을 service role로 우회함');
-  const response = await f.request('v2/resolve', { images: locations.map(({ bucket, path }) => ({ bucket, path })) });
+  const response = await f.request('v2/resolve', { images: requested });
   assert.equal(response.status, 200);
-  assert.deepEqual((await response.json()).map(({ url }) => url), ['one-url', null, null, null, null, 'signed']);
+  assert.deepEqual(await response.json(), [{ ...image, url: 'signed', expires_at: 'future' }]);
 });
 
 test('이전 GCS 복사본은 삭제 전용 경로에서 확인한 뒤에만 완료로 기록한다', async () => {

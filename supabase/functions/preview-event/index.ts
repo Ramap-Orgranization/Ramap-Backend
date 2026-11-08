@@ -79,7 +79,7 @@ Deno.serve(async (request) => {
 
   try {
     const supabase = createServiceClient();
-    const imageUrl = await createEvidenceUrl(supabase, evidencePath);
+    const imageUrl = await createEvidenceUrl(evidencePath);
     const caption = sourceUrl ? await fetchInstagramCaption(sourceUrl) : null;
     const draft = await analyze(apiKey, registrationType, caption?.cleanText ?? null, imageUrl, feedback);
     if (caption?.isExact) draft.description = caption.cleanText;
@@ -252,9 +252,9 @@ async function analyze(
   };
 }
 
-async function createEvidenceUrl(supabase: ReturnType<typeof createServiceClient>, path: string | null) {
+async function createEvidenceUrl(path: string | null) {
   if (!path || !/^[\w-]+\.(?:jpe?g|png)$/i.test(path)) return null;
-  const { data, error } = await mediaStorage(supabase).from(EVIDENCE_BUCKET).createSignedUrl(path, 300);
+  const { data, error } = await mediaStorage().from(EVIDENCE_BUCKET).createSignedUrl(path);
   if (error) throw error;
   return data.signedUrl;
 }

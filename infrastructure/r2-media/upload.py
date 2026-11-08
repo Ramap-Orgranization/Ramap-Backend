@@ -22,28 +22,25 @@ def main():
     content = args.file.read_bytes()
     checksum = hashlib.sha256(content).hexdigest()
     def call(action, body):
-        result = migration.request('POST', config['media_api_url'] + '/internal/' + ('v2/' if config.get('r2_account_id') else '') + action, json.dumps(body).encode(),
+        result = migration.request('POST', config['media_api_url'].rstrip('/') + '/internal/v2/' + action, json.dumps(body).encode(),
             {'Authorization': 'Bearer ' + migration.key, 'Content-Type': 'application/json'})
         return json.loads(result)
     prepared = call('prepare', {'bucket': args.bucket, 'path': args.path, 'content_type': args.content_type, 'byte_size': len(content)})
-    if prepared['provider'] == 'supabase':
-        target = migration.root + '/storage/v1/object/' + urllib.parse.quote(args.bucket + '/' + args.path, safe='/')
-        migration.request('POST', target, content, {'Authorization': 'Bearer ' + migration.key, 'apikey': migration.key, 'Content-Type': args.content_type})
-        public_url = migration.root + '/storage/v1/object/public/' + urllib.parse.quote(args.bucket + '/' + args.path, safe='/')
-    else:
-        if not prepared.get('ready'):
-            target = urllib.parse.urlsplit(prepared['url'])
-            query = urllib.parse.parse_qs(target.query)
-            r2 = (prepared['provider'] == 'r2' and config.get('r2_account_id')
-                  and target.hostname == config['r2_account_id'] + '.r2.cloudflarestorage.com'
-                  and target.path == '/' + config['r2_private_bucket'] + '/pending/' + prepared['id']
-                  and query.get('X-Amz-Algorithm') == ['AWS4-HMAC-SHA256'] and query.get('X-Amz-Signature'))
-            if target.scheme != 'https' or target.username or target.password or target.fragment or target.port not in (None, 443) or not r2:
-                raise SystemExit('Invalid signed upload target')
-            headers = {'Content-Type': args.content_type, 'If-None-Match': '*'}
-            migration.request('PUT', prepared['url'], content, headers)
-            call('finalize', {'id': prepared['id']})
-        public_url = config['r2_public_base_url'].rstrip('/') + '/' + urllib.parse.quote(args.bucket + '/' + args.path, safe='/')
+    if prepared['provider'] != 'r2':
+        raise SystemExit('Invalid media provider')
+    if not prepared.get('ready'):
+        target = urllib.parse.urlsplit(prepared['url'])
+        query = urllib.parse.parse_qs(target.query)
+        r2 = (config.get('r2_account_id')
+              and target.hostname == config['r2_account_id'] + '.r2.cloudflarestorage.com'
+              and target.path == '/' + config['r2_private_bucket'] + '/pending/' + prepared['id']
+              and query.get('X-Amz-Algorithm') == ['AWS4-HMAC-SHA256'] and query.get('X-Amz-Signature'))
+        if target.scheme != 'https' or target.username or target.password or target.fragment or target.port not in (None, 443) or not r2:
+            raise SystemExit('Invalid signed upload target')
+        headers = {'Content-Type': args.content_type, 'If-None-Match': '*'}
+        migration.request('PUT', prepared['url'], content, headers)
+        call('finalize', {'id': prepared['id']})
+    public_url = config['r2_public_base_url'].rstrip('/') + '/' + urllib.parse.quote(args.bucket + '/' + args.path, safe='/')
     downloaded = migration.request('GET', public_url)
     if hashlib.sha256(downloaded).hexdigest() != checksum:
         raise SystemExit('Public image checksum mismatch')

@@ -25,7 +25,7 @@ Deno.serve(async (request) => {
                 const { data: count, error } = await serviceClient.rpc("account_has_external_media", { p_user_id: data.user.id });
                 return !error && count === false;
             }
-            const response = await fetch(`${mediaUrl.replace(/\/$/, "")}/v1/account/cleanup`, {
+            const response = await fetch(`${mediaUrl.replace(/\/$/, "")}/v2/account/cleanup`, {
                 method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
                 body: "{}", signal: AbortSignal.timeout(45_000), redirect: "error",
             }).catch(() => null);

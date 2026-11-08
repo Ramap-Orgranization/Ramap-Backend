@@ -137,7 +137,7 @@ Deno.serve(async (request) => {
   }
   if (duplicates && duplicates.length > 0) {
     if (createdExternalVenueId) await supabase.from("external_venues").delete().eq("id", createdExternalVenueId);
-    await deleteEvidence(supabase, evidencePath);
+    await deleteEvidence(evidencePath);
     return json({ code: "duplicate" }, 409);
   }
 
@@ -147,9 +147,9 @@ Deno.serve(async (request) => {
   try {
     if (evidencePath && /^[\w-]+\.(?:jpe?g|png)$/i.test(evidencePath)) {
       imagePath = `events/${eventId}/1.${evidencePath.split(".").pop()!.toLowerCase()}`;
-      await mediaStorage(supabase).copy(EVIDENCE_BUCKET, evidencePath, EVENT_BUCKET, imagePath);
+      await mediaStorage().copy(EVIDENCE_BUCKET, evidencePath, EVENT_BUCKET, imagePath);
     } else if (sourceUrl && /\/(?:p|reel)\//.test(sourceUrl)) {
-      imagePath = await copyInstagramImage(supabase, sourceUrl, eventId);
+      imagePath = await copyInstagramImage(sourceUrl, eventId);
     }
 
     const { error: insertError } = await supabase.from("shop_events").insert({
@@ -173,7 +173,7 @@ Deno.serve(async (request) => {
     if (insertError) throw insertError;
     eventCreated = true;
     await saveParticipants(supabase, eventId, venueName ? null : shopId, eventParticipants, venueName ? shopId : null);
-    await deleteEvidence(supabase, evidencePath);
+    await deleteEvidence(evidencePath);
     return json({ id: eventId });
   } catch (error) {
     if (eventCreated) {
@@ -181,19 +181,18 @@ Deno.serve(async (request) => {
       await supabase.from("shop_events").delete().eq("id", eventId);
     }
     if (createdExternalVenueId) await supabase.from("external_venues").delete().eq("id", createdExternalVenueId);
-    if (imagePath) await mediaStorage(supabase).from(EVENT_BUCKET).remove([imagePath]);
-    await deleteEvidence(supabase, evidencePath);
+    if (imagePath) await mediaStorage().from(EVENT_BUCKET).remove([imagePath]);
+    await deleteEvidence(evidencePath);
     console.error("register-event failed", error);
     return json({ code: "registration_failed" }, 422);
   }
 });
 
-async function deleteEvidence(supabase: ReturnType<typeof createServiceClient>, path: string | null) {
-  if (isEvidencePath(path)) await mediaStorage(supabase).from(EVIDENCE_BUCKET).remove([path]);
+async function deleteEvidence(path: string | null) {
+  if (isEvidencePath(path)) await mediaStorage().from(EVIDENCE_BUCKET).remove([path]);
 }
 
 async function copyInstagramImage(
-  supabase: ReturnType<typeof createServiceClient>,
   sourceUrl: string,
   eventId: string,
 ): Promise<string | null> {
@@ -208,9 +207,8 @@ async function copyInstagramImage(
   if (!image?.ok || !extension) return null;
 
   const imagePath = `events/${eventId}/1.${extension}`;
-  const { error } = await mediaStorage(supabase).from(EVENT_BUCKET).upload(imagePath, await image.arrayBuffer(), {
+  const { error } = await mediaStorage().from(EVENT_BUCKET).upload(imagePath, await image.arrayBuffer(), {
     contentType,
-    upsert: false,
   });
   if (error) throw error;
   return imagePath;
@@ -334,7 +332,7 @@ async function registerOperatingNotice(
     : duplicateNoticeQuery.eq("notice_date", startDate)).limit(1);
   if (duplicateError) return json({ code: "server_unavailable" }, 503);
   if (duplicates && duplicates.length > 0) {
-    await deleteEvidence(supabase, evidencePath);
+    await deleteEvidence(evidencePath);
     return json({ code: "duplicate" }, 409);
   }
 
@@ -351,7 +349,7 @@ async function registerOperatingNotice(
     const rows = isMonthly ? closureDates.map((date) => ({ ...baseNotice, notice_date: date, end_date: date })) : [baseNotice];
     const { data: notices, error: insertError } = await supabase.from("admin_shop_operating_notice_records").insert(rows).select("id");
     if (insertError || !notices?.length) throw insertError ?? new Error("Operating notice was not created");
-    await deleteEvidence(supabase, evidencePath);
+    await deleteEvidence(evidencePath);
     return json({ id: notices[0].id, ids: notices.map((notice: { id: string }) => notice.id) });
   } catch (error) {
     console.error("register-operating-notice failed", error);
