@@ -33,6 +33,19 @@ def main():
                 raise AssertionError('R2 미복사 사진이 있으면 전환을 중단해야 합니다')
             run(*psql, '-c', "update media_private.locations set verified=true where etag='source'")
             run(*psql, '-f', str(retirement), '-f', str(tests / 'withdrawn_review_media.sql'))
+            decoupling = next((tests.parent / 'migrations').glob('*_decouple_photo_storage_buckets.sql'))
+            run(*psql, '-c', "update media_private.settings set legacy_required=true")
+            blocked = subprocess.run((*psql, '-f', str(decoupling)), capture_output=True, text=True)
+            if blocked.returncode == 0 or 'Retire Supabase photo serving' not in blocked.stderr:
+                raise AssertionError('호환 복사가 필요하면 물리 버킷 분리를 중단해야 합니다')
+            run(*psql, '-c', "update media_private.settings set legacy_required=false")
+            run(*psql, '-c', "update media_private.locations set verified=false where etag='source'")
+            blocked = subprocess.run((*psql, '-f', str(decoupling)), capture_output=True, text=True)
+            if blocked.returncode == 0 or 'Copy referenced photos to R2' not in blocked.stderr:
+                raise AssertionError('사용 중인 R2 사본 검증 없이는 버킷 분리를 중단해야 합니다')
+            run(*psql, '-c', "update media_private.locations set verified=true where etag='source'")
+            run(*psql, '-f', str(decoupling), '-f', str(tests / 'decoupled_photo_storage.sql'))
+            print('PASS: Supabase 사진 사본 삭제 격리·버킷 제거 후 R2 업로드/읽기/삭제·용량/MIME 제한')
             print('PASS: R2 사진 전환 가드와 탈퇴 사진 예약·검증·만료 정리·재시도')
             print('PASS: 은퇴 저장소 실제 삭제 확인·계정별 claim·lease·재시도·권한, 종료 이벤트·미참조 제외, 미래·공유·신고 증거 유지, R2 v1/v2 호환·복사 스냅샷·삭제 fence·GCS 전용 inventory·ETag 분리, 미확정·타인 사진 거절, 구버전 복사, 확정 재시도, 신고 보존, 삭제 lease, 백필 부활 차단, RPC 권한')
         except subprocess.CalledProcessError as error:

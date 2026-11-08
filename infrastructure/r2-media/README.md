@@ -83,6 +83,12 @@ python3 infrastructure/r2-media/deploy.py --apply --redeploy-only --r2-config /a
 3. 사진 API와 정리 job을 배포하고, 이벤트 Edge Function과 앱을 차례로 배포한다. SQL 적용 후 새 사진 API가 뜨기 전의 탈퇴 사진 보존 요청은 재시도가 필요할 수 있으므로 두 단계를 연이어 적용한다.
 4. 사진 업로드, 권한별 서명, 이벤트 제보 사진 복사, 테스트 계정의 탈퇴 사진 보존과 원본 정리를 검증한다. 백필 도구와 원본 삭제 작업은 보존 기간 중 기존 Supabase 사본에 접근할 수 있다.
 
+## Supabase 사진 버킷 제거
+
+사진용 물리 버킷을 제거하기 전에 `20261108130741_decouple_photo_storage_buckets.sql`을 적용한다. R2 읽기·쓰기가 켜져 있고 호환 복사가 종료됐으며 현재 사진과 보존 증거에 검증된 R2 사본이 있어야 한다. 사진 종류별 용량·형식 설정과 registry 참조는 `media_private.buckets`로 분리한다. Supabase 삭제를 논리 사진 전체 삭제로 전파하던 트리거도 제거한다. 사용자가 앱에서 사진을 삭제하는 R2 정리 경로는 유지한다.
+
+정리 직전에 현재 참조와 원본의 변경 시각을 다시 확인하고 R2 객체의 실제 존재·크기·형식·ETag·체크섬을 대조한다. 사진 사본은 Storage API로 제거하고, 객체가 없음을 확인한 후 해당 Supabase 위치 이력의 `deleted`를 갱신한다. `storage.objects`를 SQL로 삭제하지 않는다. 빈 사진 버킷도 Storage API로 제거한다. 운영 사진 원본이나 메뉴 수집 원문을 이 절차에 섞지 않는다. 특히 `menu-snapshot-raw`는 사진 버킷이 아니며 계속 보존한다.
+
 ## 기존 사진과 신규분 복사
 
 inventory는 Supabase 원본과 논리 registry의 합집합이며 복사 원본은 Supabase다. 현재 참조와 기존 이벤트 종료 규칙을 확인해 종료된 이벤트 사진·미참조 파일은 제외한다. 오늘 종료·미래 이벤트와 현재 데이터에서 재사용하는 사진, 신고·제보 증거는 유지한다. inventory의 migration_needed/migration_reason으로 대상·제외 사유와 대상 바이트를 집계하며, 복사 시작 전 서버와 예약 RPC에서도 다시 검사한다. 제외 원본은 삭제하지 않는다. 지원 저장소에 원본이 없는 파일은 누락시키지 않고 오류로 남긴다. 도구는 원본 삭제와 설정 활성화를 수행하지 않는다. manifest는 개인정보가 포함될 수 있어 Git 외부에 권한 0600으로 저장한다.
@@ -116,7 +122,7 @@ R2_SMOKE=staging node services/media-api/r2-smoke.mjs
 
 삭제는 기록된 generation에 한정한다. generation이 없는 과거 이력은 실제 객체와 대조해 보완해야 하며 임의로 최신 파일을 삭제하지 않는다. GCS soft-delete 보존 중에는 파일이 아직 남아 있으므로 제공자의 보존 기한이 끝나고 부재가 확인될 때까지 재시도한다. 관련 회귀 검증은 `python3 supabase/tests/media_storage_test.py`와 `npm --prefix services/media-api test`로 실행한다.
 
-서버를 되돌릴 때도 이미 등록된 R2 전용 사진을 제공할 수 있도록 R2 읽기·쓰기를 유지한다. 전환 SQL과 새 탈퇴 복사 경로를 짝으로 관리한다. Worker URL이 배포됐다면 Worker와 객체 제공도 유지한다. 원본 보존 종료는 별도 결정이다. Supabase 원본의 일반 삭제는 전체 논리 사진 삭제로 전파되므로 단순 일괄 삭제하지 않는다.
+서버를 되돌릴 때도 이미 등록된 R2 전용 사진을 제공할 수 있도록 R2 읽기·쓰기를 유지한다. 전환 SQL과 새 탈퇴 복사 경로를 짝으로 관리한다. Worker URL이 배포됐다면 Worker와 객체 제공도 유지한다. Supabase 사진 사본을 정리하려면 아래의 버킷 분리를 먼저 적용한다. 이전 GCS 사본과 위치 이력의 보존·삭제 절차는 유지한다.
 
 기존 자체 도메인 방식도 `public_delivery=custom_domain`으로 지원하지만, 그 경우 소유 도메인·Cloudflare zone·Cache Purge 토큰이 필요하다. Worker 방식으로 바꾸며 이미 배포된 자체 도메인을 끄는 작업은 별도 검토한다.
 
