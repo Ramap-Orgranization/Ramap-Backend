@@ -7,7 +7,7 @@
 - `/v2/account/cleanup`: 계정 삭제 fence 이후 리뷰 사진을 계정과 분리된 R2 경로에 복사하고 검증한 뒤, 해당 계정의 작업만 claim하고 모든 관리 복사본 정리를 확인한다. 전역 큐는 정기 worker가 처리한다.
 - `/internal/v2/*`: 신뢰된 서버 키를 가진 운영 도구 전용이다. 임의 URL을 서명하지 않는다.
 
-서버 배포 순서는 [사진 전송의 R2 전환](../../infrastructure/r2-media/README.md#사진-전송의-r2-전환)을 따른다.
+서버 배포 순서는 [구버전 API 종료](../../infrastructure/r2-media/README.md#구버전-api-종료)를 따른다.
 
 R2 signed PUT은 비공개 pending 경로, MIME, Content-Length, create-once 조건에 결속한다. 확정 시 실제 파일 signature·크기·SHA-256을 확인한다. 검증된 R2 위치를 기록한 뒤 ready로 전환한다. 만료된 업로드와 실패한 삭제는 30분 작업이 회수한다. 미지원 provider를 다른 저장소로 처리하지 않으며 실패로 남긴다.
 

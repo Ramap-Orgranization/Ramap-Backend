@@ -68,6 +68,14 @@ python3 infrastructure/r2-media/deploy.py --apply --redeploy-only --r2-config /a
 
 공개 사진 주소는 `R2_PUBLIC_BASE_URL`, `R2_PUBLIC_DELIVERY=worker`로 설정한다. 외부 네이버 사진은 그대로 둔다.
 
+## 구버전 API 종료
+
+1. 스토어에서 최소 지원 빌드를 설치할 수 있고 강제 업데이트 정책이 적용되었는지 확인한다.
+2. 기존 Cloud Run이 `/v2/account/cleanup`과 `/internal/v2/*`를 제공하는 상태에서 `delete-account`, `preview-event`, `register-event` Edge Functions를 먼저 배포한다. 운영 업로드 도구도 같은 경로를 사용하도록 교체한다.
+3. 사진 API와 정리 작업을 배포한 뒤 최신 앱과 서버 도구의 사진 읽기·쓰기 및 계정 탈퇴 경로를 확인한다. 그 다음 `20261107061853_retire_legacy_api_versions.sql`을 적용하고, [권한 검증 SQL](../../supabase/tests/retired_api_access.sql)로 종료된 RPC와 현재 RPC를 확인한다.
+
+롤백에 이전 사진 API 또는 이전 앱이 필요하면 먼저 기존 RPC와 실행 권한을 복구한다.
+
 ## 사진 전송의 R2 전환
 
 1. 운영 앱과 등록 도구가 v2 사진 API를 지원하는지 확인한다. 사용 중인 사진의 R2 복사를 검증하고 미완료 업로드가 없는 시점에 전환한다.
