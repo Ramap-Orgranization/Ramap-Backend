@@ -31,13 +31,22 @@ Deno.serve(async (request) => {
     return new Response("Ignored", { status: 202 });
   }
   if (!payload.record || typeof payload.record !== "object" || Array.isArray(payload.record)
-    || typeof payload.record.event_type !== "string") {
+    || typeof payload.record.event_type !== "string" || typeof payload.record.id !== "string"
+    || !/^[0-9a-f-]{36}$/i.test(payload.record.id)) {
     return new Response("Invalid webhook payload", { status: 400 });
   }
 
   try {
-    assertKnownEventType(payload.record.event_type);
-    return Response.json(await sendEventNotifications(createServiceClient(), payload.record, "new_event"));
+    const supabase = createServiceClient();
+    const { data: canonical, error } = await supabase.from("shop_events")
+      .select("id,shop_id,title,event_type,start_date,announcement_id").eq("id", payload.record.id).maybeSingle();
+    if (error) throw error;
+    if (!canonical) return new Response("Event unavailable", { status: 202 });
+    // A linked event belongs exclusively to the explicit publication path,
+    // including draft revisions. Never trust the webhook row as canonical.
+    if (canonical.announcement_id) return new Response("Publication owns delivery", { status: 202 });
+    assertKnownEventType(canonical.event_type);
+    return Response.json(await sendEventNotifications(supabase, canonical, "new_event"));
   } catch (error) {
     console.error(error);
     return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });

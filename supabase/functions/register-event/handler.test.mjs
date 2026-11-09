@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { stripTypeScriptTypes } from "node:module";
 import { runInNewContext } from "node:vm";
 import test from "node:test";
+import { announcementLink, linkRegistration } from "../_shared/notification-publication.ts";
 import { validCalendarDate, validClosureSchedules } from "../_shared/operating-notice-schedule.ts";
 
 const source = stripTypeScriptTypes((await readFile(new URL("./index.ts", import.meta.url), "utf8")).replace(/^import .*;\n/gm, ""));
@@ -11,7 +12,7 @@ const base = { shop_name: "테스트 매장", title: "연속 일정", descriptio
 
 function harness({ allowed = true, overlapping = false } = {}) {
   let handler;
-  const calls = { inserts: [], filters: [], clients: 0 };
+  const calls = { inserts: [], filters: [], clients: 0, rpc: [] };
   function from(table) {
     const filters = [];
     let inserted = false;
@@ -30,7 +31,7 @@ function harness({ allowed = true, overlapping = false } = {}) {
       async single() { return { data: { id: "notice" }, error: null }; },
       then(resolve, reject) {
         calls.filters.push({ table, filters });
-        const data = table === "ramen_shops" ? [{ id: "shop" }] : inserted ? [{ id: "notice" }] :
+        const data = table === "ramen_shops" ? (filters.some(([op, key, value]) => key === "name" && value === "External guest") ? [] : [{ id: "shop" }]) : inserted ? [{ id: "notice" }] :
           !inserted && table === "admin_shop_operating_notice_records" && overlapping && filters.some(([op]) => op === "not") ? [{ id: "overlap" }] : [];
         return Promise.resolve({ data, error: null }).then(resolve, reject);
       },
@@ -40,10 +41,10 @@ function harness({ allowed = true, overlapping = false } = {}) {
   runInNewContext(source, {
     Deno: { serve: (value) => { handler = value; } },
     Request, Response, URL, Date, crypto, console,
-    validCalendarDate, validClosureSchedules,
+    validCalendarDate, validClosureSchedules, announcementLink, linkRegistration,
     mediaStorage: (client) => client.storage,
     isAdministrator: async () => allowed,
-    createServiceClient: () => { calls.clients++; return { from }; },
+    createServiceClient: () => { calls.clients++; return { from, rpc: async (name, args) => { calls.rpc.push({ name, args, insertedTables: calls.inserts.map(i => i.table) }); return { data: {}, error: null }; } }; },
     assertKnownEventType: (value) => { assert.ok(["collab", "popup", "limited_menu", "summer_limited", "new_menu", "store_renewal"].includes(value)); },
     normalizeMapUrl: () => null,
     requiresExistingVenueSelection: () => false,
@@ -129,4 +130,20 @@ test("잘못된 달력 항목은 예외 없이 쓰기 전에 거절한다", asyn
     assert.equal((await app.invoke({ ...base, registration_type: "operating_notice", notice_type: "full_close", start_date: "2026-10-01", end_date: "2026-10-31", daily_schedules })).status, 400);
     assert.equal(app.calls.inserts.length, 0);
   }
+});
+
+test("linked event has announcement before webhook and readiness follows participant completion", async () => {
+  const app = harness();
+  const announcement_id = "00000000-0000-4000-8000-000000000001";
+  assert.equal((await app.invoke({ ...base, announcement_id, announcement_revision: 1, participants: [{ name: "External guest", instagram_url: null }] })).status, 200);
+  assert.equal(app.calls.inserts.find(i => i.table === "shop_events").value.announcement_id, announcement_id);
+  const links = app.calls.rpc.filter(c => c.name === "link_notification_registration");
+  assert.deepEqual(links.map(c => c.args.p_ready), [false, true]);
+  assert.ok(links[1].insertedTables.includes("shop_event_participants"));
+});
+test("linked operating registration reserves explicit publication before automatic enqueue", async () => {
+  const app = harness();
+  assert.equal((await app.invoke({ ...base, registration_type: "operating_notice", notice_type: "full_close", announcement_id: "00000000-0000-4000-8000-000000000001", announcement_revision: 1 })).status, 200);
+  assert.equal(app.calls.inserts.find(i => i.table === "admin_shop_operating_notice_records").value[0].announcement_id, "00000000-0000-4000-8000-000000000001");
+  assert.equal(app.calls.rpc.at(-1).args.p_ready, true);
 });

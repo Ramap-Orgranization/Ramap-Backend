@@ -22,3 +22,7 @@ verify_jwt = true
 # The database authenticates internal validation requests with a private HMAC key.
 [functions.validate-place-report]
 verify_jwt = false
+
+# Administrator identity is checked again in the handler.
+[functions.admin-notification-publication]
+verify_jwt = true
