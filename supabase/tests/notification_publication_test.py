@@ -130,8 +130,8 @@ def main():
             # Device ownership/version changes use existing protected registration path.
             sql(f"select public.register_push_registration_protocol('{NEW}','android','token','{A}',1)", 'authenticated', A)
             sql(f"select public.register_push_registration('{OLD}','ios','token')", 'authenticated', A)
-            sql(f"select public.register_push_registration_protocol('{NEW}','android','token','{A}',1)", 'authenticated', A)
-            assert sql(f"select supported_protocol_version from public.push_registrations where identifier='{NEW}'") == '1'
+            sql(f"select public.register_push_registration_protocol('{NEW}','android','token','{A}',2)", 'authenticated', A)
+            assert sql(f"select supported_protocol_version from public.push_registrations where identifier='{NEW}'") == '2'
             reject(f"select public.register_push_registration_protocol('{NEW}','android','token','{A}',3)", 'unsupported_notification_protocol', 'authenticated', A)
             sql(f"select public.register_push_registration_protocol('{NEW}','android','token','{A}',1)", 'authenticated', A)
             sql(f"select public.register_push_registration_protocol('{OTHER}','android','token','{B}',1)", 'authenticated', B)

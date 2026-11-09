@@ -1,3 +1,5 @@
+import { automaticOperatingNoticeCopy } from "./operating-notice-copy.ts";
+
 export type Destination =
   | { version: 1; action: "event_detail"; event_id: string }
   | { version: 1; action: "operating_notices" | "none" }
@@ -124,7 +126,7 @@ export function buildPublicationPayload(input: {
   // verified structured facts, while corrections retain their reviewed wording.
   const copies = facts.map((fact) => fact.message_format === "sentence"
     ? { title: fact.notification_title ?? "영업 변동 안내", body: fact.message }
-    : null);
+    : !input.cancelled && !input.correction ? automaticOperatingNoticeCopy(fact) : null);
   const sentenceCopy = copies.every((copy) => copy !== null);
   const titles = new Set(copies.filter((copy) => copy !== null).map((copy) => copy.title));
   const title = input.cancelled ? "공지 취소 안내" : input.correction ? "공지 정정 안내"

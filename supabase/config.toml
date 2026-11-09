@@ -26,3 +26,7 @@ verify_jwt = false
 # Administrator identity is checked again in the handler.
 [functions.admin-notification-publication]
 verify_jwt = true
+
+# Explicit internal secret authentication; private cron configuration lives in DB/Vault.
+[functions.dispatch-notification-publications]
+verify_jwt = false
