@@ -6,7 +6,8 @@ import test from "node:test";
 import { effectiveEndDate, isManageableEvent } from "../_shared/admin-event-policy.ts";
 
 const source = stripTypeScriptTypes((await readFile(new URL("./index.ts", import.meta.url), "utf8")).replace(/^import .*;\n/gm, ""));
-function harness(record = { event_type: "limited_menu", start_date: "2026-01-01", end_date: null }) {
+function harness(record = { event_type: "limited_menu", start_date: "2026-01-01", end_date: null }, invalidationError = null) {
+  const invalidations = [];
   const updates = [];
   const tables = [];
   const query = {
@@ -14,9 +15,9 @@ function harness(record = { event_type: "limited_menu", start_date: "2026-01-01"
     async maybeSingle() { return { data: record, error: null }; },
     update(value) { updates.push(value); return { eq: async () => ({ error: null }) }; },
   };
-  const context = { Deno: { serve() {} }, Response, Date, Intl, effectiveEndDate, isManageableEvent, createServiceClient: () => ({ from: (table) => { tables.push(table); return query; } }) };
+  const context = { Deno: { serve() {} }, Response, Date, Intl, effectiveEndDate, isManageableEvent, createServiceClient: () => ({ rpc: async (name, args) => { invalidations.push({ name, args, updatesBefore: updates.length }); return { data: null, error: invalidationError }; }, from: (table) => { tables.push(table); return query; } }) };
   runInNewContext(source + "\nglobalThis.api = { validateChanges, applyCorrection, isActiveRecord, matchesNoticeDate };", context);
-  return { ...context.api, updates, tables };
+  return { ...context.api, updates, tables, invalidations };
 }
 test("event title and type corrections are retained instead of dropped by the notice branch", () => {
   const api = harness();
@@ -82,3 +83,12 @@ for (const notice_type of ["early_close", "planned_close"]) {
     assert.equal(api.updates[0].end_time, undefined); // Omitted field preserves the stored closing time.
   });
 }
+
+test("linked publication invalidates before canonical update and failure blocks edit", async () => {
+  const ok = harness(); await ok.applyCorrection("event", "event-id", { title: "Changed" });
+  assert.equal(ok.invalidations[0].name, "invalidate_notification_registration");
+  assert.equal(ok.invalidations[0].updatesBefore, 0);
+  const blocked = harness(undefined, new Error("revision_conflict"));
+  assert.equal((await blocked.applyCorrection("event", "event-id", { title: "Changed" })).status, 409);
+  assert.equal(blocked.updates.length, 0);
+});

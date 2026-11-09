@@ -1,3 +1,4 @@
+import { sendFcmPayload } from "./push-delivery.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.55.0";
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2.55.0";
 import { JWT } from "npm:google-auth-library@10.2.1";
@@ -181,33 +182,19 @@ async function sendMessage(
   event: ShopEvent,
   notificationType: NotificationType,
 ) {
-  const response = await fetch(`https://fcm.googleapis.com/v1/projects/${projectId}/messages:send`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
-    body: JSON.stringify({
-      message: {
-        [registration.target_type]: registration.identifier,
-        notification: { title: notificationTitle(event.event_type, notificationType), body: event.title },
-        data: {
-          notification_type: notificationType,
-          event_type: event.event_type,
-          event_id: event.id,
-          shop_id: event.shop_id ?? "",
-          deep_link: `ramap://notification/event?event_id=${encodeURIComponent(event.id)}`,
-        },
-        android: { notification: { sound: "default" } },
-        apns: { payload: { aps: { sound: "default" } } },
-      },
-    }),
-    signal: AbortSignal.timeout(15_000),
-  });
-  if (response.ok) return { ok: true as const };
-  const error = await response.text();
-  return {
-    ok: false as const,
-    error,
-    invalidRegistration: /UNREGISTERED|registration-token-not-registered/i.test(error),
-  };
+  const result = await sendFcmPayload(projectId, accessToken, registration, {
+    notification: { title: notificationTitle(event.event_type, notificationType), body: event.title },
+    data: {
+      notification_type: notificationType,
+      event_type: event.event_type,
+      event_id: event.id,
+      shop_id: event.shop_id ?? "",
+      deep_link: `ramap://notification/event?event_id=${encodeURIComponent(event.id)}`,
+    },
+  }, fetch, "legacy");
+  if (result.status === "sent") return { ok: true as const };
+  if (result.status === "unknown") throw new Error(result.error ?? "provider_response_unknown");
+  return { ok: false as const, error: result.error ?? "provider_rejected", invalidRegistration: result.invalidRegistration === true };
 }
 
 async function finishDelivery(

@@ -110,8 +110,15 @@ async function applyCorrection(type: RegistrationType, id: string, value: unknow
     if (noticeType === "full_close") filtered.end_time = null;
   }
   if (Object.keys(filtered).length === 0) return json({ code: "no_supported_changes" }, 422);
+  const client = createServiceClient();
+  // Invalidate first, so a correction failure cannot send stale approved facts.
+  // An administrator must explicitly review and publish the new revision.
+  const { error: invalidationError } = await client.rpc("invalidate_notification_registration", {
+    p_registration_type: type, p_registration_id: id,
+  });
+  if (invalidationError) return json({ code: "publication_invalidation_failed" }, 409);
   const table = type === "event" ? "shop_events" : "admin_shop_operating_notice_records";
-  const { error } = await createServiceClient().from(table).update(filtered).eq("id", id);
+  const { error } = await client.from(table).update(filtered).eq("id", id);
   return error ? json({ code: "update_failed" }, 422) : json({ success: true });
 }
 

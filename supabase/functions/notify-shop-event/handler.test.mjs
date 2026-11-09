@@ -12,14 +12,14 @@ const validPayload = {
   type: "INSERT",
   table: "shop_events",
   schema: "public",
-  record: { id: "test-event", shop_id: "test-shop", title: "테스트 이벤트", event_type: "popup" },
+  record: { id: "00000000-0000-4000-8000-000000000001", shop_id: "test-shop", title: "테스트 이벤트", event_type: "popup" },
 };
 const notificationTotals = { targeted: 1, sent: 1, failed: 0, unknown: 0 };
 
-function harness({ secret = "test-webhook-secret", sendError } = {}) {
+function harness({ secret = "test-webhook-secret", sendError, canonical = validPayload.record, readError = null } = {}) {
   let handler;
   const calls = { clients: 0, eventTypes: [], notifications: [], errors: [] };
-  const client = { testClient: true };
+  const client = { testClient: true, from: () => ({ select() { return this; }, eq() { return this; }, async maybeSingle() { return { data: canonical, error: readError }; } }) };
   runInNewContext(source, {
     Deno: {
       env: { get: (name) => name === "WEBHOOK_SECRET" ? secret : undefined },
@@ -141,14 +141,14 @@ test("정상 public.shop_events INSERT는 기존 알림 함수로 한 번만 전
   assert.deepEqual(app.calls.notifications[0], [app.client, validPayload.record, "new_event"]);
 });
 
-test("알 수 없는 이벤트 종류는 기존 검증 오류 계약을 유지하고 발송하지 않는다", async () => {
-  const app = harness();
+test("canonical DB의 알 수 없는 이벤트 종류는 발송하지 않는다", async () => {
+  const app = harness({ canonical: { ...validPayload.record, event_type: "unknown" } });
   const response = await app.invoke({
     ...validPayload, record: { ...validPayload.record, event_type: "unknown" },
   });
   assert.equal(response.status, 500);
   assert.deepEqual(await response.json(), { error: "Unsupported event_type: unknown" });
-  assert.equal(app.calls.clients, 0);
+  assert.equal(app.calls.clients, 1);
   assert.equal(app.calls.notifications.length, 0);
 });
 
@@ -158,4 +158,17 @@ test("알림 처리 자체의 실패는 기존 500 오류 계약을 유지한다
   assert.equal(response.status, 500);
   assert.deepEqual(await response.json(), { error: "Notification failed" });
   assert.equal(app.calls.notifications.length, 1);
+});
+
+
+test("연결된 초안 이벤트는 기존 webhook에서 보내지 않는다", async () => {
+  const app = harness({ canonical: { ...validPayload.record, announcement_id: "draft" } });
+  assert.equal((await app.invoke(validPayload)).status, 202);
+  assert.equal(app.calls.notifications.length, 0);
+});
+test("webhook 제목과 유형 대신 canonical DB 내용을 사용한다", async () => {
+  const canonical = { ...validPayload.record, title: "확인된 제목" };
+  const app = harness({ canonical });
+  assert.equal((await app.invoke({ ...validPayload, record: { ...validPayload.record, title: "오래된 제목", event_type: "unknown" } })).status, 200);
+  assert.equal(app.calls.notifications[0][1].title, "확인된 제목");
 });

@@ -1,3 +1,4 @@
+import { announcementLink, linkRegistration } from "../_shared/notification-publication.ts";
 import { mediaStorage } from "../_shared/media-storage.ts";
 import { validCalendarDate, validClosureSchedules } from "../_shared/operating-notice-schedule.ts";
 import { isAdministrator } from "../_shared/admin-auth.ts";
@@ -14,11 +15,20 @@ Deno.serve(async (request) => {
   if (!await isAdministrator(request)) return json({ code: "administrator_required" }, 403);
 
   const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+  let publicationLink;
+  try { publicationLink = announcementLink(body); } catch { return json({ code: "invalid_announcement_link" }, 400); }
   const registrationType = text(body?.registration_type) ?? "event";
   if (registrationType !== "event" && registrationType !== "operating_notice") {
     return json({ code: "invalid_registration_type" }, 400);
   }
   const supabase = createServiceClient();
+  if (publicationLink) {
+    const { error } = await supabase.rpc("notification_publication_command", {
+      p_command: "read", p_announcement_id: publicationLink.id, p_expected_revision: publicationLink.revision,
+      p_document: null, p_idempotency_key: "registration-check",
+    });
+    if (error) return json({ code: "announcement_not_ready" }, 409);
+  }
   if (registrationType === "operating_notice") return registerOperatingNotice(supabase, body ?? {});
 
   const shopName = text(body?.shop_name);
@@ -154,6 +164,7 @@ Deno.serve(async (request) => {
 
     const { error: insertError } = await supabase.from("shop_events").insert({
       id: eventId,
+      ...(publicationLink ? { announcement_id: publicationLink.id } : {}),
       shop_id: venueName ? null : shopId,
       external_venue_id: externalVenueId,
       venue_name: venueName,
@@ -172,7 +183,9 @@ Deno.serve(async (request) => {
     });
     if (insertError) throw insertError;
     eventCreated = true;
+    if (publicationLink) await linkRegistration(supabase, publicationLink.id, publicationLink.revision, "event", eventId, false);
     await saveParticipants(supabase, eventId, venueName ? null : shopId, eventParticipants, venueName ? shopId : null);
+    if (publicationLink) await linkRegistration(supabase, publicationLink.id, publicationLink.revision, "event", eventId, true);
     await deleteEvidence(evidencePath);
     return json({ id: eventId });
   } catch (error) {
@@ -344,11 +357,16 @@ async function registerOperatingNotice(
       notice_date: startDate, end_date: endDate, start_time: null, end_time: endTime,
       schedule_override: null, daily_schedules: [], source_url: sourceUrl,
       review_note: "관리자 미리보기 승인 등록",
+      announcement_id: announcementLink(body)?.id ?? null,
     };
     // Store calendar closures as individual days so older app versions do not close the whole month.
     const rows = isMonthly ? closureDates.map((date) => ({ ...baseNotice, notice_date: date, end_date: date })) : [baseNotice];
     const { data: notices, error: insertError } = await supabase.from("admin_shop_operating_notice_records").insert(rows).select("id");
     if (insertError || !notices?.length) throw insertError ?? new Error("Operating notice was not created");
+    const publicationLink = announcementLink(body);
+    if (publicationLink) {
+      for (const notice of notices) await linkRegistration(supabase, publicationLink.id, publicationLink.revision, "operating_notice", notice.id, true);
+    }
     await deleteEvidence(evidencePath);
     return json({ id: notices[0].id, ids: notices.map((notice: { id: string }) => notice.id) });
   } catch (error) {
