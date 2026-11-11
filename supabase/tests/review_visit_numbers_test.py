@@ -41,11 +41,15 @@ def main():
                     tests / "fixtures/withdrawn_reviews.sql",
                     *sorted((tests.parent / "migrations").glob("*_preserve_withdrawn_account_reviews.sql")),
                     tests / "withdrawn_reviews.sql",
+                    tests.parent / "migrations/20261109153431_allow_self_review_likes.sql",
+                    tests / "review_likes.sql",
                 ]
             for source in sources:
                 run("psql", "-X", "-h", str(root), "-U", "postgres", "-d", "postgres",
                     "-v", "ON_ERROR_STOP=1", "-f", str(source))
             print("PASS: 반복 작성·삭제, 기존 누적 번호, 비공개·검수 상태, 작성자·매장 분리, 페이지, 조회 권한, 탈퇴 리뷰 보존과 사진 복사·공개 경계")
+            if args.projection_sql is None:
+                print("PASS: 본인 리뷰 좋아요 등록·취소, 중복 요청, 기존 공개·게시 조건")
         except subprocess.CalledProcessError as error:
             print(error.stdout)
             print(error.stderr)
